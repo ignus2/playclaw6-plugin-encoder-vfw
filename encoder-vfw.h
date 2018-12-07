@@ -33,14 +33,19 @@ class CVideoEncoderVFW : public CPluginEncoderTemplate
 
 	void			OnImGuiDraw();
 
+	/// pixelFormat: COLOR_RGB24, etc.
+	void			fillBitmapInfoHeader(LPBITMAPINFOHEADER lpbih, unsigned width, unsigned height, int pixelFormat);
+
 	// GUI
 	bool  m_refreshImGuiInfo = false;
+	CGuiCombobox m_cbPixelFormat;
 	std::string m_codecName;
 	std::string m_codecDescription;
 	std::string m_codecDriver;
 	std::string m_codecStateStr;
 
 	// Data, settings
+	int m_pixelFormat = GH_VIDEO_ENCODER_EXTRA_DATA::INIT_DATA::COLOR_RGB24;
 	uint32_t m_fccHandler = 0;
 	std::vector<uint8_t> m_state; ///< Compressor state
 	int m_lKey = 1;

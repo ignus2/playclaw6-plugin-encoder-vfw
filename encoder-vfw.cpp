@@ -98,18 +98,32 @@ CVideoEncoderVFW::~CVideoEncoderVFW()
 
 void CVideoEncoderVFW::SetDefaults()
 {
+	m_pixelFormat = GH_VIDEO_ENCODER_EXTRA_DATA::INIT_DATA::COLOR_RGB24;
 	m_fccHandler = 0;
 	m_state.clear();
 	m_lKey = 1;
 	m_lQ = ICQUALITY_DEFAULT;
+
+	m_cbPixelFormat.m_sName = "##vfw-pixel-format";
+	m_cbPixelFormat.m_fWidth = -50; // ?
+	m_cbPixelFormat.m_Items.clear();
+	m_cbPixelFormat.m_Items.push_back("RGB24");  m_cbPixelFormat.m_ItemsData.push_back(GH_VIDEO_ENCODER_EXTRA_DATA::INIT_DATA::COLOR_RGB24);
+	m_cbPixelFormat.m_Items.push_back("NV12");   m_cbPixelFormat.m_ItemsData.push_back(GH_VIDEO_ENCODER_EXTRA_DATA::INIT_DATA::COLOR_NV12);
+	m_cbPixelFormat.m_Items.push_back("I420");   m_cbPixelFormat.m_ItemsData.push_back(GH_VIDEO_ENCODER_EXTRA_DATA::INIT_DATA::COLOR_I420);
 }
 
 void CVideoEncoderVFW::LoadFromFile(const Json::Value& config)
 {
 	const Json::Value& vfw = config["vfw"];
 
+	// pixel format
+	jsonLoad(m_pixelFormat, vfw["pixelFormat"], false);
+	for (size_t i = 0; i < m_cbPixelFormat.m_ItemsData.size(); ++i)
+		if (m_pixelFormat == m_cbPixelFormat.m_ItemsData[i])
+			m_cbPixelFormat.select(i);
+
 	// fcc
-	jsonLoad(m_fccHandler, vfw["fccHandler"]);
+	jsonLoad(m_fccHandler, vfw["fccHandler"], false);
 
 	// state (codec config)
 	char state[4096] = {};
@@ -128,14 +142,50 @@ void CVideoEncoderVFW::LoadFromFile(const Json::Value& config)
 void CVideoEncoderVFW::SaveToFile(Json::Value& config)
 {
 	Json::Value& vfw = config["vfw"];
+	jsonSave(m_pixelFormat, vfw["pixelFormat"]);
 	jsonSave(m_fccHandler, vfw["fccHandler"]);
 	jsonSave(data2hex(m_state.data(), m_state.size()).c_str(), vfw["state"]);
 	jsonSave(m_lKey, vfw["lKey"]);
 	jsonSave(m_lQ, vfw["lQ"]);
 }
 
+void CVideoEncoderVFW::fillBitmapInfoHeader(LPBITMAPINFOHEADER lpbih, unsigned width, unsigned height, int pixelFormat)
+{
+	lpbih->biSize = sizeof(BITMAPINFOHEADER);
+	lpbih->biWidth = width;
+	lpbih->biHeight = height;
+	lpbih->biPlanes = 1;
+	switch (m_pixelFormat)
+	{
+	default:
+	case GH_VIDEO_ENCODER_EXTRA_DATA::INIT_DATA::COLOR_RGB24:
+		lpbih->biHeight = -lpbih->biHeight; // negative for top-down DIB
+		lpbih->biBitCount = 24;
+		lpbih->biCompression = BI_RGB;
+		lpbih->biSizeImage = lpbih->biWidth * abs(lpbih->biHeight) * 3;
+		break;
+	case GH_VIDEO_ENCODER_EXTRA_DATA::INIT_DATA::COLOR_NV12:
+		lpbih->biBitCount = 12;
+		lpbih->biCompression = mmioFOURCC('N','V','1','2');
+		lpbih->biSizeImage = lpbih->biWidth * abs(lpbih->biHeight) * 12 / 8;
+		break;
+	case GH_VIDEO_ENCODER_EXTRA_DATA::INIT_DATA::COLOR_I420:
+		lpbih->biBitCount = 12;
+		lpbih->biCompression = mmioFOURCC('I','4','2','0');
+		lpbih->biSizeImage = lpbih->biWidth * abs(lpbih->biHeight) * 12 / 8;
+		break;
+	}
+}
+
 void CVideoEncoderVFW::OnImGuiDraw()
 {
+	// Pixel format
+	ImGui::Text("Pixel format (select before choosing a compressor!)");
+	if (m_cbPixelFormat.draw())
+	{
+		m_pixelFormat = m_cbPixelFormat.m_ItemsData.at(m_cbPixelFormat.getsel());
+	}
+
 	// Button
 	bool pressed = ImGui::Button("Choose compressor...");
 	if (pressed)
@@ -144,7 +194,9 @@ void CVideoEncoderVFW::OnImGuiDraw()
 		compvars.cbSize = sizeof(compvars);
 		compvars.dwFlags = ICMF_COMPVARS_VALID;
 		compvars.fccHandler = m_fccHandler;
-		if (ICCompressorChoose(GetActiveWindow(), 0, NULL, NULL, &compvars, NULL) && compvars.hic)
+		BITMAPINFOHEADER bih = {};
+		fillBitmapInfoHeader(&bih, 128, 128, m_pixelFormat);
+		if (ICCompressorChoose(GetActiveWindow(), 0, &bih, NULL, &compvars, NULL) && compvars.hic)
 		{
 			// fcc from COMPVARS
 			m_fccHandler = compvars.fccHandler;
@@ -202,7 +254,9 @@ void CVideoEncoderVFW::OnImGuiDraw()
 	ImGui::Text("Codec state:");
 	ImGui::TextWrapped(m_codecStateStr.c_str());
 
-	ImGui::TextWrapped("NOTE: Codec settings are saved correctly, but cannot be passed back to the codec selection/config dialog, so values there could look different!");
+	ImGui::Text("NOTES:");
+	ImGui::TextWrapped("- Codec settings are saved correctly, but cannot be passed back to the codec selection/config dialog, so values there could look different");
+	ImGui::TextWrapped("- The RGB24 pixel format is top-down, which some compressors cannot handle (so they won't show up in the list)");
 }
 
 void CVideoEncoderVFW::OnImGuiConfigure(void* param)
@@ -249,9 +303,8 @@ BOOL CVideoEncoderVFW::StartEncoder(unsigned *lpuWidth, unsigned *lpuHeight, uns
 	ICSetState(hic, m_state.data(), m_state.size());
 
 	// Init data
-	// TODO: Allow other input formats (NV12, I420)
 	m_lpAllocator = lpInitData->lpAllocator;
-	lpInitData->colorSpace = GH_VIDEO_ENCODER_EXTRA_DATA::INIT_DATA::COLOR_RGB24;
+	lpInitData->colorSpace = m_pixelFormat;
 	lpInitData->allFrames = true; // ?
 	//lpInitData->acceptGPU = false; // ?
 	lpInitData->dropLimit = 0; // ?
@@ -259,13 +312,7 @@ BOOL CVideoEncoderVFW::StartEncoder(unsigned *lpuWidth, unsigned *lpuHeight, uns
 	// Input format
 	// This must be persistent, ICSeqCompressFrameStart() only seems to store a pointer to it
 	memset(&m_inputFormat, 0, sizeof(m_inputFormat));
-	m_inputFormat.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-	m_inputFormat.bmiHeader.biWidth = *lpuWidth;
-	m_inputFormat.bmiHeader.biHeight = -(int)*lpuHeight; // negative for top-down DIB
-	m_inputFormat.bmiHeader.biPlanes = 1;
-	m_inputFormat.bmiHeader.biBitCount = 24;
-	m_inputFormat.bmiHeader.biCompression = BI_RGB;
-	m_inputFormat.bmiHeader.biSizeImage = m_inputFormat.bmiHeader.biWidth * m_inputFormat.bmiHeader.biHeight * m_inputFormat.bmiHeader.biBitCount / 8;
+	fillBitmapInfoHeader(&m_inputFormat.bmiHeader, *lpuWidth, *lpuHeight, m_pixelFormat);
 
 	// Determine output format
 	DWORD formatSize = ICCompressGetFormatSize(hic, &m_inputFormat);
