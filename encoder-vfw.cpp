@@ -126,9 +126,9 @@ void CVideoEncoderVFW::LoadFromFile(const Json::Value& config)
 	jsonLoad(m_fccHandler, vfw["fccHandler"], false);
 
 	// state (codec config)
-	char state[4096] = {};
-	jsonLoad(state, sizeof(state), vfw["state"]);
-	std::string stateStr(state);
+	std::vector<char> state(128 * 1024, '\0');
+	jsonLoad(state.data(), state.size(), vfw["state"]);
+	std::string stateStr(state.data());
 	m_state.resize(stateStr.size() / 2);
 	try {
 		hex2data(stateStr, m_state.data(), m_state.size());
@@ -251,8 +251,8 @@ void CVideoEncoderVFW::OnImGuiDraw()
 	ImGui::Text(m_codecDescription.c_str());
 	ImGui::Text(m_codecDriver.c_str());
 
-	ImGui::Text("Codec state:");
-	ImGui::TextWrapped(m_codecStateStr.c_str());
+	//ImGui::Text("Codec state:");
+	//ImGui::TextWrapped(m_codecStateStr.c_str());
 
 	ImGui::Text("NOTES:");
 	ImGui::TextWrapped("- Codec settings are saved correctly, but cannot be passed back to the codec selection/config dialog, so values there could look different");
